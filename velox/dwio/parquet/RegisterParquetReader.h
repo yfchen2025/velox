@@ -18,6 +18,8 @@
 
 namespace facebook::velox::parquet {
 
+void initializeCryptoFactory(std::string& kmsUri, std::string& keytabPath, bool clacEnabled=false);
+
 void registerParquetReaderFactory();
 
 void unregisterParquetReaderFactory();

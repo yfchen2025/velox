@@ -36,7 +36,8 @@ FetchContent_Declare(
     git apply ${CMAKE_CURRENT_LIST_DIR}/cpr/cpr-libcurl-compatible.patch && git
     apply ${CMAKE_CURRENT_LIST_DIR}/cpr/cpr-remove-sancheck.patch)
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
-set(CPR_USE_SYSTEM_CURL OFF)
+# Use system libcurl because the embedded libcurl isn't built with kerberos related features enabled
+set(CPR_USE_SYSTEM_CURL ON)
 # ZLIB has already been found by find_package(ZLIB, REQUIRED), set CURL_ZLIB=OFF
 # to save compile time.
 set(CURL_ZLIB OFF)

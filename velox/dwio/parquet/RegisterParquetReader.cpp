@@ -16,9 +16,16 @@
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
 #endif
 
 namespace facebook::velox::parquet {
+
+void initializeCryptoFactory(std::string& kmsUri, std::string& keytabPath, bool clacEnabled) {
+#ifdef VELOX_ENABLE_PARQUET
+  CryptoFactory::initialize(kmsUri, keytabPath, clacEnabled);
+#endif
+}
 
 void registerParquetReaderFactory() {
 #ifdef VELOX_ENABLE_PARQUET

@@ -16,10 +16,20 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <glog/logging.h>
+#include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
+#include <thrift/transport/TBufferTransports.h> //@manual
+
+#include "velox/dwio/parquet/crypto/AesEncryption.h"
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
+#include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
+#include "velox/dwio/parquet/crypto/FileDecryptor.h"
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
 namespace facebook::velox::parquet {
@@ -104,9 +114,13 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  std::shared_ptr<FileDecryptor> fileDecryptor() {return fileDecryptor_;}
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
+
+  void processMetaData();
 
   void initializeSchema();
 
@@ -143,6 +157,9 @@ class ReaderBase {
   RowTypePtr schema_;
   std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
 
+  std::shared_ptr<FileDecryptionProperties> fileDecryptionProperties_;
+  std::shared_ptr<FileDecryptor> fileDecryptor_;
+
   std::optional<SemanticVersion> version_;
 
   // Map from row group index to pre-created loading BufferedInput.
@@ -163,8 +180,89 @@ ReaderBase::ReaderBase(
   VELOX_CHECK_GE(fileLength_, 12, "Parquet file is too small");
 
   loadFileMetaData();
+  processMetaData();
   initializeSchema();
   initializeVersion();
+}
+
+// according to how parquet fields are encrypted in Uber, we assume
+// 1. footer is not encrypted as a whole, only parts of column metadata is encrypted using column key
+// 2. data is encrypted using column key
+void ReaderBase::processMetaData() {
+  if (!CryptoFactory::getInstance().clacEnabled()) {
+    return;
+  }
+  if (!fileMetaData_->__isset.encryption_algorithm) {
+    return;
+  }
+
+  fileDecryptionProperties_ = CryptoFactory::getInstance().getFileDecryptionProperties();
+  std::string fileAad = FileDecryptor::handleAadPrefix(fileDecryptionProperties_.get(), fileMetaData_->encryption_algorithm);
+  ParquetCipher::type algo = FileDecryptor::getEncryptionAlgorithm(fileMetaData_->encryption_algorithm);
+
+  std::string user("");
+  if (options_.identity()) {
+    user = options_.identity()->user;
+  }
+
+  fileDecryptor_ = std::make_shared<FileDecryptor>(
+      fileDecryptionProperties_.get(),
+      fileAad,
+      algo,
+      user);
+  // TODO check footer integrity? ParquetMetadataConverter.java#1299
+
+  if (fileMetaData_->row_groups.empty()) {
+    return;
+  }
+  for (thrift::RowGroup& rowGroup : fileMetaData_->row_groups) {
+    int columnOrdinal = -1;
+    for (thrift::ColumnChunk& columnChunk: rowGroup.columns) {
+      columnOrdinal ++;
+      thrift::ColumnMetaData& metadata = columnChunk.meta_data;
+      // plaintext column
+      if (!columnChunk.__isset.crypto_metadata) {
+        if (!columnChunk.__isset.meta_data) {
+          VELOX_USER_FAIL("[CLAC] ColumnMetaData not set in plaintext column");
+        }
+        std::vector<std::string>& pathList = metadata.path_in_schema;
+        ColumnPath columnPath(pathList);
+        std::string keyMetadata{""};
+        fileDecryptor_->setColumnCryptoMetadata(columnPath, false, keyMetadata, columnOrdinal);
+        continue;
+      }
+      // Encrypted with column key
+      thrift::ColumnCryptoMetaData& columnCryptoMetaData = columnChunk.crypto_metadata;
+      thrift::EncryptionWithColumnKey& encryptionWithColumnKey = columnCryptoMetaData.ENCRYPTION_WITH_COLUMN_KEY;
+      std::vector<std::string>& pathList = encryptionWithColumnKey.path_in_schema;
+      std::string& columnKeyMetadata = encryptionWithColumnKey.key_metadata;
+      ColumnPath columnPath(pathList);
+      std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup =
+          fileDecryptor_->setColumnCryptoMetadata(columnPath, true, columnKeyMetadata, columnOrdinal);
+      // if column key is available, recover ColumnMetaData. Otherwise, ColumnMetaData is null - meaning the user doesn't have permission to access the column.
+      if (columnDecryptionSetup->isKeyAvailable() && columnChunk.__isset.encrypted_column_metadata) {
+        auto decryptor = columnDecryptionSetup->getMetadataDecryptor();
+        std::string aad = createModuleAad(decryptor->fileAad(), kColumnMetaData, rowGroup.ordinal, static_cast<uint16_t>(columnOrdinal), static_cast<int16_t>(-1));
+
+        int encryptedLen = columnChunk.encrypted_column_metadata.size();
+        thrift::ColumnMetaData columnMetaData;
+        size_t decryptedBufferLen = decryptor->plaintextLength(encryptedLen);
+        BufferPtr decryptedBuffer;
+        dwio::common::ensureCapacity<char>(decryptedBuffer, decryptedBufferLen, &pool_);
+        int decrypted_buffer_len = decryptor->decrypt(reinterpret_cast<const uint8_t*>(columnChunk.encrypted_column_metadata.data()), encryptedLen, decryptedBuffer->asMutable<uint8_t>(), decryptedBufferLen, aad);
+
+        std::shared_ptr<thrift::ThriftTransport> thriftTransport =
+            std::make_shared<thrift::ThriftBufferedTransport>(
+                decryptedBuffer->as<uint8_t>(), decrypted_buffer_len);
+        auto thriftProtocol = std::make_unique<
+            apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
+            thriftTransport);
+        columnMetaData.read(thriftProtocol.get());
+
+        columnChunk.__set_meta_data(columnMetaData);
+      }
+    }
+  }
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -951,6 +1049,7 @@ class ParquetRowReader::Impl {
         pool_,
         columnReaderStats_,
         readerBase_->fileMetaData(),
+        readerBase_->fileDecryptor(),
         readerBase->sessionTimezone(),
         options_.timestampPrecision());
     requestedType_ = options_.requestedType() ? options_.requestedType()

@@ -318,6 +318,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
       executor_.get(),
       core::QueryConfig(std::move(config)),
       connectorConfigs,
+      {},
       nullptr);
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
