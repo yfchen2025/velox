@@ -185,14 +185,10 @@ ReaderBase::ReaderBase(
   initializeVersion();
 }
 
-// according to how parquet fields are encrypted in Uber, we assume
-// 1. footer is not encrypted as a whole, only parts of column metadata is encrypted using column key
-// 2. data is encrypted using column key
+// Mainly for processing encryption related metadata for decrypting metadata and columns. If Parquet files are not encrypted, directly return.
+// There are two encryption modes for Parquet files, Plaintext Footer mode and Encrypted Footer mode. Only the former is supported here.
 void ReaderBase::processMetaData() {
-  if (!CryptoFactory::getInstance().clacEnabled()) {
-    return;
-  }
-  if (!fileMetaData_->__isset.encryption_algorithm) {
+  if (!CryptoFactory::getInstance().clacEnabled() || !fileMetaData_->__isset.encryption_algorithm) {
     return;
   }
 
@@ -210,7 +206,6 @@ void ReaderBase::processMetaData() {
       fileAad,
       algo,
       user);
-  // TODO check footer integrity? ParquetMetadataConverter.java#1299
 
   if (fileMetaData_->row_groups.empty()) {
     return;
@@ -219,19 +214,18 @@ void ReaderBase::processMetaData() {
     int columnOrdinal = -1;
     for (thrift::ColumnChunk& columnChunk: rowGroup.columns) {
       columnOrdinal ++;
-      thrift::ColumnMetaData& metadata = columnChunk.meta_data;
-      // plaintext column
+      // Case 1, this column is not encrypted
       if (!columnChunk.__isset.crypto_metadata) {
-        if (!columnChunk.__isset.meta_data) {
-          VELOX_USER_FAIL("[CLAC] ColumnMetaData not set in plaintext column");
-        }
+        VELOX_USER_CHECK(columnChunk.__isset.meta_data, "[CLAC] ColumnMetaData not set in plaintext column");
+        thrift::ColumnMetaData& metadata = columnChunk.meta_data;
         std::vector<std::string>& pathList = metadata.path_in_schema;
         ColumnPath columnPath(pathList);
         std::string keyMetadata{""};
         fileDecryptor_->setColumnCryptoMetadata(columnPath, false, keyMetadata, columnOrdinal);
         continue;
       }
-      // Encrypted with column key
+
+      // Case 2, this column is encrypted with column key
       thrift::ColumnCryptoMetaData& columnCryptoMetaData = columnChunk.crypto_metadata;
       thrift::EncryptionWithColumnKey& encryptionWithColumnKey = columnCryptoMetaData.ENCRYPTION_WITH_COLUMN_KEY;
       std::vector<std::string>& pathList = encryptionWithColumnKey.path_in_schema;
@@ -285,7 +279,7 @@ void ReaderBase::loadFileMetaData() {
       readSize, stream.get(), copy.data(), bufferStart, bufferEnd);
   VELOX_CHECK(
       strncmp(copy.data() + readSize - 4, "PAR1", 4) == 0,
-      "No magic bytes found at end of the Parquet file");
+      "Encrypted Footer mode (\"PARE\") is unsupported or no magic bytes found at end of the Parquet file");
 
   uint32_t footerLength;
   std::memcpy(&footerLength, copy.data() + readSize - 8, sizeof(uint32_t));
@@ -317,8 +311,8 @@ void ReaderBase::loadFileMetaData() {
 }
 
 void ReaderBase::initializeSchema() {
-  if (fileMetaData_->__isset.encryption_algorithm) {
-    VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
+  if (!CryptoFactory::getInstance().clacEnabled() && fileMetaData_->__isset.encryption_algorithm) {
+    VELOX_UNSUPPORTED("Decryption (CLAC) is not enabled for encrypted Parquet files. Please enable it first.");
   }
 
   VELOX_CHECK_GT(
