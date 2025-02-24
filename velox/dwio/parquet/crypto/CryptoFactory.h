@@ -14,10 +14,8 @@ class CryptoFactory {
   static void initialize(const std::string& kmsUri,
                          const std::string& keytabPath,
                          const bool clacEnabled) {
-    if (!instance_) {
-      instance_ = std::unique_ptr<CryptoFactory>(
-          new CryptoFactory(kmsUri, keytabPath, clacEnabled));
-    }
+    instance_ = std::unique_ptr<CryptoFactory>(
+        new CryptoFactory(kmsUri, keytabPath, clacEnabled));
   }
   static CryptoFactory& getInstance() {
     if (!instance_) {

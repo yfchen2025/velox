@@ -17,6 +17,8 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
+#include "common/encode/Base64.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -95,6 +97,71 @@ TEST_F(ParquetReaderTest, parseSample) {
 
   assertReadWithReaderAndExpected(
       sampleSchema(), *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, readEncryptedColumnWithClacEnaled) {
+  CryptoFactory::initialize("", "", true);
+
+  const std::string sample(getExampleFilePath("clac_columns.parquet"));
+
+  auto& kms = static_cast<InMemoryKMSClient&>(CryptoFactory::getInstance().getDecryptionKeyRetriever());
+  std::string encryptionKey = encoding::Base64::decodeUrl("s4qfala5hmJ0frF5T4drCQ");
+  std::string keyMetadata = encoding::Base64::decodeUrl("AgEAAAAYNnp6ekEzNEVwVHpoMTUwOVpwc2NLUT09AgAAAAQAAAAAAwAAABhSR0RsdUtNREQrbERrSkdoSkZKd0N3PT0EAAAABHRlc3Q");
+  kms.putKey(keyMetadata, encryptionKey);
+  auto key = CryptoFactory::getInstance().getDecryptionKeyRetriever().getKey(keyMetadata, "");
+  EXPECT_EQ(key, encryptionKey);
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  auto numRows = reader->numberOfRows();
+  EXPECT_EQ(numRows, 1);
+  auto type = reader->typeWithId();
+
+  auto encryptedColumn = "col2";
+
+  auto rowType = ROW({encryptedColumn}, {VARCHAR()});
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(rowType, 10, leafPool_.get());
+  constexpr int kBatchSize = 100;
+  EXPECT_EQ(rowReader->next(kBatchSize, result), 1);
+  auto rowVector = result->as<RowVector>();
+  auto encryptedCol = rowVector->childAt(0)->as<FlatVector<StringView>>();
+  EXPECT_TRUE(encryptedCol != nullptr);
+  EXPECT_TRUE(result->size() == 1);
+  EXPECT_TRUE(encryptedCol->isNullAt(0) == false);
+  EXPECT_TRUE(encryptedCol->valueAt(0) == "pear3");
+}
+
+TEST_F(ParquetReaderTest, readNonEncryptedColumnFromEncrypedFile) {
+  //no need to talk to kms
+  CryptoFactory::initialize("", "", true);
+
+  const std::string sample(getExampleFilePath("clac_columns.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  auto numRows = reader->numberOfRows();
+  EXPECT_EQ(numRows, 1);
+
+  auto nonEncryptedColumn = "col1";
+
+  auto rowType = ROW({nonEncryptedColumn}, {INTEGER()});
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(rowType, 10, leafPool_.get());
+  constexpr int kBatchSize = 100;
+  EXPECT_EQ(rowReader->next(kBatchSize, result), 1);
+  auto rowVector = result->as<RowVector>();
+  auto intCol = rowVector->childAt(0)->as<FlatVector<int>>();
+  EXPECT_TRUE(intCol != nullptr);
+  EXPECT_TRUE(result->size() == 1);
+  EXPECT_TRUE(intCol->isNullAt(0) == false);
+  EXPECT_TRUE(intCol->valueAt(0) == 6);
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedList) {
