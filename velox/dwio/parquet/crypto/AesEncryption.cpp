@@ -186,8 +186,7 @@ AesDecryptor::AesDecryptor(
 std::shared_ptr<AesDecryptor> AesDecryptor::make(
     ParquetCipher::type algId,
     int keyLen,
-    bool metadata,
-    std::vector<std::weak_ptr<AesDecryptor>>* allDecryptors) {
+    bool metadata) {
   if (ParquetCipher::AES_GCM_V1 != algId &&
       ParquetCipher::AES_GCM_CTR_V1 != algId) {
     std::stringstream ss;
@@ -196,9 +195,6 @@ std::shared_ptr<AesDecryptor> AesDecryptor::make(
   }
 
   auto decryptor = std::make_shared<AesDecryptor>(algId, keyLen, metadata);
-  if (allDecryptors != nullptr) {
-    allDecryptors->push_back(decryptor);
-  }
   return decryptor;
 }
 

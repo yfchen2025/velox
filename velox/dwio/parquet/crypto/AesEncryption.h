@@ -34,8 +34,7 @@ class AesDecryptor {
                         bool containsLength = true);
 
   static std::shared_ptr<AesDecryptor> make(
-      ParquetCipher::type algId, int keyLen, bool metadata,
-      std::vector<std::weak_ptr<AesDecryptor>>* allDecryptors);
+      ParquetCipher::type algId, int keyLen, bool metadata);
 
   ~AesDecryptor();
   void wipeOut();

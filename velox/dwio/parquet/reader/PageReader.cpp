@@ -71,7 +71,6 @@ void PageReader::seekToPage(int64_t row) {
         dictionaryPageProcessed_ = true;
       } else {
         headerAad = createModuleAad(headerDecryptor->fileAad(), kDataPageHeader, rowGroupIndex_, columnIndex_, pageOrdinal_);
-        // TODO update existing aad instead of create a new one. AesEncryptor.class quickUpdatePageAAD()
       }
     }
 

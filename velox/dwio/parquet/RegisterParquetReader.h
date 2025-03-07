@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include "velox/dwio/parquet/crypto/KeyRetriever.h"
+
 namespace facebook::velox::parquet {
 
-void initializeCryptoFactory(std::string& kmsUri, std::string& keytabPath, bool clacEnabled=false);
+void initializeCryptoFactory(std::shared_ptr<DecryptionKeyRetriever> kmsClient, bool clacEnabled=false);
 
 void registerParquetReaderFactory();
 

@@ -28,10 +28,4 @@ class CryptoException : public std::exception {
   std::string msg_;
 };
 
-class LegalHoldKeyAccessDeniedException : public CryptoException {
- public:
-  explicit LegalHoldKeyAccessDeniedException(const std::string& msg)
-      : CryptoException(msg) {}
-};
-
 }

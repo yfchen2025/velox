@@ -5,7 +5,6 @@
 #include <mutex>
 #include <string>
 #include <utility>
-#include <vector>
 #include "velox/dwio/parquet/crypto/AesEncryption.h"
 #include "velox/dwio/parquet/crypto/ColumnPath.h"
 #include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
@@ -14,8 +13,7 @@
 namespace facebook::velox::parquet {
 
 class ColumnDecryptionSetup;
-using ColumnPathToDecryptiorSetupMap =
-    std::map<std::string, std::shared_ptr<ColumnDecryptionSetup>>;
+using ColumnPathToDecryptionSetupMap = std::map<std::string, std::shared_ptr<ColumnDecryptionSetup>>;
 
 class Decryptor {
  public:
@@ -25,8 +23,8 @@ class Decryptor {
   const std::string& fileAad() const { return fileAad_; }
 //  void updateAad(const std::string& aad) { aad_ = aad; }
 
-  [[nodiscard]] int plaintextLength(int ciphertextLen) const;
-  [[nodiscard]] int ciphertextLength(int plaintextLen) const;
+  int plaintextLength(int ciphertextLen) const;
+  int ciphertextLength(int plaintextLen) const;
   int decrypt(const uint8_t* ciphertext, int ciphertextLen,
               uint8_t* plaintext, int plaintextLen, std::string_view aad);
 
@@ -43,11 +41,11 @@ class ColumnDecryptionSetup {
   explicit ColumnDecryptionSetup(ColumnPath& columnPath, bool encrypted, bool keyAvailable,
                                          std::shared_ptr<Decryptor> dataDecryptor,
                                          std::shared_ptr<Decryptor> metadataDecryptor,
-                                         int columnOrdinal, bool legalHoldMasking,
+                                         int columnOrdinal,
                                          std::string_view savedException) :
         columnPath_(columnPath), encrypted_(encrypted), keyAvailable_(keyAvailable),
         dataDecryptor_(std::move(dataDecryptor)), metadataDecryptor_(std::move(metadataDecryptor)),
-        columnOrdinal_(columnOrdinal), legalHoldMasking_(legalHoldMasking),
+        columnOrdinal_(columnOrdinal),
         savedException_(savedException) {}
 
   ColumnPath getColumnPath() {return columnPath_;}
@@ -55,7 +53,6 @@ class ColumnDecryptionSetup {
   std::shared_ptr<Decryptor> getDataDecryptor () {return dataDecryptor_;}
   std::shared_ptr<Decryptor> getMetadataDecryptor () {return metadataDecryptor_;}
   int getColumnOrdinal() {return columnOrdinal_;}
-  bool isLegalHoldMasking() {return legalHoldMasking_;}
   bool isKeyAvailable() {return keyAvailable_;}
   std::string savedException() {return savedException_;}
 
@@ -66,7 +63,6 @@ class ColumnDecryptionSetup {
   std::shared_ptr<Decryptor> dataDecryptor_;
   std::shared_ptr<Decryptor> metadataDecryptor_;
   int columnOrdinal_;
-  bool legalHoldMasking_;
   std::string savedException_;
 };
 
@@ -89,9 +85,9 @@ class FileDecryptor {
       std::string& keyMetadata,
       int columnOrdinal);
 
-  std::shared_ptr<ColumnDecryptionSetup> getColumnCryptoMetadata(std::string& columnPath) {
-      auto it = columnPathToDecryptiorSetupMap_.find(columnPath);
-      if (it == columnPathToDecryptiorSetupMap_.end()) {
+  std::shared_ptr<ColumnDecryptionSetup> getColumnCryptoMetadata(const std::string& columnPath) {
+      const auto it = columnPathToDecryptionSetupMap_.find(columnPath);
+      if (it == columnPathToDecryptionSetupMap_.end()) {
         return nullptr;
       }
       return it->second;
@@ -101,25 +97,14 @@ class FileDecryptor {
   static ParquetCipher::type getEncryptionAlgorithm(thrift::EncryptionAlgorithm& encryptionAlgorithm);
 
  private:
-  std::shared_ptr<Decryptor> getColumnMetaDecryptor(
-      const std::string& column_key);
-  std::shared_ptr<Decryptor> getColumnDataDecryptor(
-      const std::string& column_key);
-  //  std::shared_ptr<Decryptor> GetFooterDecryptor(const std::string& aad, bool metadata);
-  std::shared_ptr<Decryptor> getColumnDecryptor(
-      const std::string& columnKey,
-      bool metadata = false);
+  std::shared_ptr<Decryptor> getColumnMetaDecryptor(const std::string& column_key);
+  std::shared_ptr<Decryptor> getColumnDataDecryptor(const std::string& column_key);
+  std::shared_ptr<Decryptor> getColumnDecryptor(const std::string& columnKey, bool metadata = false);
 
   FileDecryptionProperties* properties_;
   std::string fileAad_;
   ParquetCipher::type algorithm_;
-  // Mutex to guard access to allDecryptors_
-  mutable std::mutex mutex_;
-  // A weak reference to all decryptors that need to be wiped out when decryption is
-  // finished, guarded by mutex_ for thread safety TODO implement this
-  std::vector<std::weak_ptr<AesDecryptor>> allDecryptors_;
-  ColumnPathToDecryptiorSetupMap columnPathToDecryptiorSetupMap_;
-  bool legalHoldMasking_; //TODO initialize
+  ColumnPathToDecryptionSetupMap columnPathToDecryptionSetupMap_;
   std::string user_;
 };
 

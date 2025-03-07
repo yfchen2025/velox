@@ -21,9 +21,9 @@
 
 namespace facebook::velox::parquet {
 
-void initializeCryptoFactory(std::string& kmsUri, std::string& keytabPath, bool clacEnabled) {
+void initializeCryptoFactory(std::shared_ptr<DecryptionKeyRetriever> kmsClient, bool clacEnabled) {
 #ifdef VELOX_ENABLE_PARQUET
-  CryptoFactory::initialize(kmsUri, keytabPath, clacEnabled);
+  CryptoFactory::initialize(kmsClient, clacEnabled);
 #endif
 }
 

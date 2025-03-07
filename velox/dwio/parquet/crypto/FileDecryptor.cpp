@@ -34,7 +34,6 @@ FileDecryptor::FileDecryptor(FileDecryptionProperties* properties,
     : properties_(properties),
       fileAad_(std::move(fileAad)),
       algorithm_(algorithm),
-      legalHoldMasking_(false),
       user_(std::move(user)) {
 }
 
@@ -47,25 +46,13 @@ FileDecryptor::setColumnCryptoMetadata(
     int columnOrdinal) {
   std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup;
   std::string columnKey;
-  bool legalHoldMasking;
   std::string savedException{""};
   if (!encrypted) {
     columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
-        columnPath, false, false, nullptr, nullptr, columnOrdinal, false, savedException);
+        columnPath, false, false, nullptr, nullptr, columnOrdinal, savedException);
   } else {
     try {
-      if (legalHoldMasking_) {
-        columnKey = properties_->keyRetriever()->getKey(keyMetadata, legalHoldMasking_, user_);
-      } else {
-        columnKey = properties_->keyRetriever()->getKey(keyMetadata, user_);
-      }
-    } catch (LegalHoldKeyAccessDeniedException& e) {
-      // parquet-mr-encr: InternalFileDecryptor.java#262
-      // Legal hold key encrypted column, but key unavailable
-      // NOTE: this indicates =>  !legalRead && isLegalHoldKey
-      legalHoldMasking = true;
-      columnKey = "";
-      savedException = e.what();
+      columnKey = properties_->keyRetriever()->getKey(keyMetadata, user_);
     } catch (CryptoException& e) {
       std::string error = e.what();
       if (error.find("http status code 403") != std::string::npos) { // KeyAccessDeniedException
@@ -78,16 +65,16 @@ FileDecryptor::setColumnCryptoMetadata(
 
     if (columnKey.empty()) {
       columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
-          columnPath, true, false, nullptr, nullptr, columnOrdinal, legalHoldMasking, savedException);
+          columnPath, true, false, nullptr, nullptr, columnOrdinal, savedException);
     } else {
       columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
           columnPath, true, true,
           getColumnDataDecryptor(columnKey),
           getColumnMetaDecryptor(columnKey),
-          columnOrdinal, false, savedException);
+          columnOrdinal, savedException);
     }
   }
-  columnPathToDecryptiorSetupMap_[columnPath.toDotString()] = columnDecryptionSetup;
+  columnPathToDecryptionSetupMap_[columnPath.toDotString()] = columnDecryptionSetup;
   return columnDecryptionSetup;
 }
 
@@ -105,8 +92,7 @@ std::shared_ptr<Decryptor> FileDecryptor::getColumnDataDecryptor(
 std::shared_ptr<Decryptor> FileDecryptor::getColumnDecryptor(
     const std::string& columnKey, bool metadata) {
   int key_len = static_cast<int>(columnKey.size());
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto aesDecryptor = AesDecryptor::make(algorithm_, key_len, metadata, &allDecryptors_);
+  auto aesDecryptor = AesDecryptor::make(algorithm_, key_len, metadata);
   return std::make_shared<Decryptor>(std::move(aesDecryptor), columnKey, fileAad_);
 }
 
